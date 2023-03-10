@@ -1,10 +1,12 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+import (
+	"fmt"
+	"hash/fnv"
+	"log"
+	"net/rpc"
+	"sort"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -13,6 +15,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -35,35 +45,55 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
+	for {
+		job := queryJob()
+		// fmt.Println(job.Id, job.Type, len(job.Val))
+		switch job.Type {
+		case 0: // map
+			mapSubmit(mapf(job.Val[0].Key, job.Val[0].Value), job.Id)
+		case 1: // reduce
+			sort.Sort(ByKey(job.Val))
+			l, r := 0, 0
+			ans := []KeyValue{}
+			for l < len(job.Val) {
+				values := []string{}
+				for r < len(job.Val) && job.Val[l].Key == job.Val[r].Key {
+					values = append(values, job.Val[r].Value)
+					r++
+				}
+				ans = append(ans, KeyValue{job.Val[l].Key, reducef(job.Val[l].Key, values)})
+				l = r
+			}
+			reduceSubmit(ans, job.Id)
+		case 2: // done
+			return
+		}
+	}
 
 }
 
-//
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
+func queryJob() Job {
+	args := Args{}
+	job := Job{}
+	ok := call("Coordinator.JobDistro", &args, &job)
+	// fmt.Println(job.Type, job.Id, len(job.Val))
+	if !ok {
+		fmt.Print("call failed!\n")
+	}
+	return job
+}
+func mapSubmit(val []KeyValue, id int) {
+	payload := Payload{id, val}
+	ok := call("Coordinator.MapSubmit", &payload, nil)
+	if !ok {
+		fmt.Print("map submit failed!\n")
+	}
+}
+func reduceSubmit(val []KeyValue, id int) {
+	payload := Payload{id, val}
+	ok := call("Coordinator.ReduceSubmit", &payload, nil)
+	if !ok {
+		fmt.Print("reduce submit failed!\n")
 	}
 }
 
